@@ -277,6 +277,54 @@ func fuseInstalled() bool {
 	return false
 }
 
+// ensureInclude adds an Include directive to the ssh config file if it's not
+// already present. Creates the file if it doesn't exist.
+func ensureInclude(configPath, includeLine string) error {
+	// Read existing config (may not exist yet).
+	data, err := os.ReadFile(configPath)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	content := string(data)
+	// Check if the Include line is already present (whole-line match).
+	for _, line := range strings.Split(content, "\n") {
+		if strings.TrimSpace(line) == includeLine {
+			return nil // already present
+		}
+	}
+	// Append the Include line. Ensure it ends with a newline first.
+	if content != "" && !strings.HasSuffix(content, "\n") {
+		content += "\n"
+	}
+	content += includeLine + "\n"
+	return os.WriteFile(configPath, []byte(content), 0o644)
+}
+
+// removeInclude removes an Include directive from the ssh config file.
+func removeInclude(configPath, includeLine string) error {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	var lines []string
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.TrimSpace(line) == includeLine {
+			continue // skip the Include line
+		}
+		lines = append(lines, line)
+	}
+	// Rejoin, trimming trailing empty lines.
+	result := strings.Join(lines, "\n")
+	result = strings.TrimRight(result, "\n")
+	if result != "" {
+		result += "\n"
+	}
+	return os.WriteFile(configPath, []byte(result), 0o644)
+}
+
 // detectControlPathDir reads the user's ~/.ssh/config and looks for a
 // ControlPath directive. If found, it extracts the directory portion (the
 // value with any trailing % token and last path component stripped). If not
@@ -345,6 +393,11 @@ func cmdInstall(stdout, stderr io.Writer) int {
 		}
 		return 1
 	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(stderr, "asshfs: %v\n", err)
+		return 1
+	}
 	// Resolve binary path: prefer the current executable so the installed job
 	// runs the same binary the user invoked.
 	binPath, err := os.Executable()
@@ -396,14 +449,39 @@ func cmdInstall(stdout, stderr io.Writer) int {
 	}
 	logger.Println("installed")
 	fmt.Fprintln(stdout, "Installed asshfs launchd agent.")
-	fmt.Fprintln(stdout, "Add the following to ~/.ssh/config (asshfs will not edit it for you):")
+
+	// Write the managed SSH config snippet and wire it into ~/.ssh/config
+	// via an Include directive so the user doesn't have to edit anything.
+	asshfsConf := filepath.Join(home, ".ssh", "asshfs.conf")
+	confContent := "Host *\n" +
+		"    ControlMaster auto\n" +
+		"    ControlPath " + socketDir + "/%C\n" +
+		"    ControlPersist 30s\n"
+	if err := os.WriteFile(asshfsConf, []byte(confContent), 0o600); err != nil {
+		fmt.Fprintf(stderr, "asshfs: write %s: %v\n", asshfsConf, err)
+		// Fall back to printing the block.
+		fmt.Fprintln(stdout, "Add the following to ~/.ssh/config:")
+		fmt.Fprintln(stdout, "")
+		fmt.Fprintln(stdout, "    Host *")
+		fmt.Fprintln(stdout, "        ControlMaster auto")
+		fmt.Fprintln(stdout, "        ControlPath "+socketDir+"/%C")
+		fmt.Fprintln(stdout, "        ControlPersist 30s")
+		return 0
+	}
+	fmt.Fprintf(stdout, "Wrote SSH config to %s\n", asshfsConf)
+
+	// Add Include directive to ~/.ssh/config if not already present.
+	sshConfig := filepath.Join(home, ".ssh", "config")
+	includeLine := "Include asshfs.conf"
+	if err := ensureInclude(sshConfig, includeLine); err != nil {
+		fmt.Fprintf(stderr, "asshfs: could not add Include to %s: %v\n", sshConfig, err)
+		fmt.Fprintln(stdout, "Add this line to ~/.ssh/config:")
+		fmt.Fprintln(stdout, "    "+includeLine)
+	} else {
+		fmt.Fprintf(stdout, "Added '%s' to %s\n", includeLine, sshConfig)
+	}
 	fmt.Fprintln(stdout, "")
-	fmt.Fprintln(stdout, "    Host *")
-	fmt.Fprintln(stdout, "        ControlMaster auto")
-	fmt.Fprintln(stdout, "        ControlPath "+socketDir+"/%C")
-	fmt.Fprintln(stdout, "        ControlPersist 30s")
-	fmt.Fprintln(stdout, "")
-	fmt.Fprintln(stdout, "Then ssh to any configured host to mount its filesystem at ~/sshfs/<host>/.")
+	fmt.Fprintln(stdout, "Done! ssh to any configured host to mount its filesystem at ~/sshfs/<host>/.")
 	return 0
 }
 
@@ -436,7 +514,13 @@ func cmdUninstall(stdout, stderr io.Writer) int {
 	}
 	logger.Println("uninstalled")
 	fmt.Fprintln(stdout, "Uninstalled asshfs launchd agent and unmounted all mounts.")
-	fmt.Fprintln(stdout, "Remove the ControlMaster/ControlPath/ControlPersist lines from ~/.ssh/config if you wish.")
+	// Remove the managed SSH config snippet and its Include directive.
+	home, _ := os.UserHomeDir()
+	asshfsConf := filepath.Join(home, ".ssh", "asshfs.conf")
+	sshConfig := filepath.Join(home, ".ssh", "config")
+	_ = removeInclude(sshConfig, "Include asshfs.conf")
+	_ = os.Remove(asshfsConf)
+	fmt.Fprintf(stdout, "Removed %s and its Include directive from ~/.ssh/config.\n", asshfsConf)
 	return 0
 }
 

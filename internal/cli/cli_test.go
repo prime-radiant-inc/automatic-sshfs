@@ -78,9 +78,9 @@ func TestInstallSmoke(t *testing.T) {
 		return
 	}
 	// install will try to launchctl load, which may fail in a sandbox/CI; that's
-	// okay as long as the plist was written and the help text printed.
-	if !strings.Contains(out.String(), "~/.ssh/config") {
-		t.Errorf("stdout = %q, want config instructions", out.String())
+	// okay as long as the plist was written and the managed config was created.
+	if !strings.Contains(out.String(), "asshfs.conf") {
+		t.Errorf("stdout = %q, want asshfs.conf mention", out.String())
 	}
 	// Plist file should exist.
 	home, _ := os.UserHomeDir()
@@ -167,5 +167,131 @@ func TestUninstallSmoke(t *testing.T) {
 	if _, err := os.Stat(plist); err == nil {
 		// It's fine if it never existed; only fail if it still exists.
 		t.Errorf("plist still present after uninstall")
+	}
+}
+
+func TestEnsureIncludeCreatesFile(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config")
+	err := ensureInclude(cfgPath, "Include asshfs.conf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(cfgPath)
+	if !strings.Contains(string(data), "Include asshfs.conf") {
+		t.Errorf("config = %q, want Include line", string(data))
+	}
+}
+
+func TestEnsureIncludeAppendsToExisting(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config")
+	os.WriteFile(cfgPath, []byte("Host web\n    HostName 10.0.0.1\n"), 0o644)
+	err := ensureInclude(cfgPath, "Include asshfs.conf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(cfgPath)
+	s := string(data)
+	if !strings.Contains(s, "Host web") {
+		t.Errorf("existing config lost: %q", s)
+	}
+	if !strings.Contains(s, "Include asshfs.conf") {
+		t.Errorf("Include line not added: %q", s)
+	}
+}
+
+func TestEnsureIncludeIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config")
+	// Add twice — should only appear once.
+	ensureInclude(cfgPath, "Include asshfs.conf")
+	ensureInclude(cfgPath, "Include asshfs.conf")
+	data, _ := os.ReadFile(cfgPath)
+	s := string(data)
+	if strings.Count(s, "Include asshfs.conf") != 1 {
+		t.Errorf("Include line appears %d times, want 1: %q", strings.Count(s, "Include asshfs.conf"), s)
+	}
+}
+
+func TestRemoveInclude(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config")
+	content := "Host web\n    HostName 10.0.0.1\nInclude asshfs.conf\nHost db\n    HostName db.example.com\n"
+	os.WriteFile(cfgPath, []byte(content), 0o644)
+	err := removeInclude(cfgPath, "Include asshfs.conf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(cfgPath)
+	s := string(data)
+	if strings.Contains(s, "Include asshfs.conf") {
+		t.Errorf("Include line still present: %q", s)
+	}
+	if !strings.Contains(s, "Host web") || !strings.Contains(s, "Host db") {
+		t.Errorf("other config lost: %q", s)
+	}
+}
+
+func TestRemoveIncludeMissing(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config")
+	os.WriteFile(cfgPath, []byte("Host web\n    HostName 10.0.0.1\n"), 0o644)
+	// Should not error even if Include line not present.
+	err := removeInclude(cfgPath, "Include asshfs.conf")
+	if err != nil {
+		t.Errorf("removeInclude on missing line should not error: %v", err)
+	}
+}
+
+func TestInstallCreatesManagedConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	var out, errOut bytes.Buffer
+	code := RunWith([]string{"asshfs", "install"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("code = %d, want 0; stderr=%q", code, errOut.String())
+	}
+	// asshfs.conf should exist with the ControlMaster directives.
+	asshfsConf := filepath.Join(home, ".ssh", "asshfs.conf")
+	data, err := os.ReadFile(asshfsConf)
+	if err != nil {
+		t.Fatalf("asshfs.conf not written: %v", err)
+	}
+	s := string(data)
+	if !strings.Contains(s, "ControlMaster auto") {
+		t.Errorf("asshfs.conf missing ControlMaster: %q", s)
+	}
+	if !strings.Contains(s, "ControlPath") {
+		t.Errorf("asshfs.conf missing ControlPath: %q", s)
+	}
+	// ~/.ssh/config should contain the Include line.
+	sshConfig := filepath.Join(home, ".ssh", "config")
+	cfgData, err := os.ReadFile(sshConfig)
+	if err != nil {
+		t.Fatalf("ssh config not written: %v", err)
+	}
+	if !strings.Contains(string(cfgData), "Include asshfs.conf") {
+		t.Errorf("ssh config missing Include: %q", string(cfgData))
+	}
+}
+
+func TestUninstallRemovesManagedConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	// Install first, then uninstall.
+	RunWith([]string{"asshfs", "install"}, &bytes.Buffer{}, &bytes.Buffer{})
+	RunWith([]string{"asshfs", "uninstall"}, &bytes.Buffer{}, &bytes.Buffer{})
+	// asshfs.conf should be gone.
+	asshfsConf := filepath.Join(home, ".ssh", "asshfs.conf")
+	if _, err := os.Stat(asshfsConf); err == nil {
+		t.Errorf("asshfs.conf still exists after uninstall")
+	}
+	// ssh config should not contain the Include line.
+	sshConfig := filepath.Join(home, ".ssh", "config")
+	if data, err := os.ReadFile(sshConfig); err == nil {
+		if strings.Contains(string(data), "Include asshfs.conf") {
+			t.Errorf("Include line still in ssh config after uninstall: %q", string(data))
+		}
 	}
 }
