@@ -61,8 +61,8 @@ func TestUnmountCmd(t *testing.T) {
 	}
 }
 
-func TestLazyUnmountCmd(t *testing.T) {
-	cmd := LazyUnmountCmd("/Users/jesse/sshfs/web")
+func TestForceUnmountCmd(t *testing.T) {
+	cmd := ForceUnmountCmd("/Users/jesse/sshfs/web")
 	s := cmd.String()
 	if !strings.Contains(s, "umount -f") {
 		t.Errorf("cmd = %q, want umount -f", s)

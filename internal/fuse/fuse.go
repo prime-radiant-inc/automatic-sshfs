@@ -44,9 +44,9 @@ func UnmountCmd(mountPoint string) *exec.Cmd {
 	return exec.Command("umount", mountPoint)
 }
 
-// LazyUnmountCmd returns a forced umount, used as a fallback when the mount
-// is busy.
-func LazyUnmountCmd(mountPoint string) *exec.Cmd {
+// ForceUnmountCmd returns a forced umount (umount -f), used as a fallback when
+// the mount is busy.
+func ForceUnmountCmd(mountPoint string) *exec.Cmd {
 	return exec.Command("umount", "-f", mountPoint)
 }
 

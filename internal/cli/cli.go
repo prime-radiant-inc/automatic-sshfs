@@ -6,7 +6,9 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 
@@ -112,7 +114,7 @@ func cmdReconcile(stdout, stderr io.Writer) int {
 	}
 
 	// 3. List actual mounts: directories under ~/sshfs/ that are mount points.
-	actual := listMounted(stdout, logger)
+	actual := listMounted(logger)
 
 	// 4. Diff and execute.
 	plan := reconcile.Diff(desired, actual)
@@ -164,7 +166,7 @@ func acquireLock() (func(), bool) {
 // listMounted returns the set of host names whose ~/sshfs/<host> is a mount
 // point. We detect a mount point by comparing the device of the directory to
 // its parent's device.
-func listMounted(stdout io.Writer, logger *log.Logger) map[string]bool {
+func listMounted(logger *log.Logger) map[string]bool {
 	out := make(map[string]bool)
 	root, err := paths.MountRoot()
 	if err != nil {
@@ -231,20 +233,110 @@ func doUnmount(host string, logger *log.Logger) error {
 		return err
 	}
 	cmd := fuse.UnmountCmd(mp)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		// Busy? Try lazy/force unmount.
-		fcmd := fuse.LazyUnmountCmd(mp)
-		if fout, ferr := fcmd.CombinedOutput(); ferr != nil {
-			return fmt.Errorf("umount: %v: %s | lazy: %v: %s", err, out, ferr, fout)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			// Busy? Try force unmount.
+			fcmd := fuse.ForceUnmountCmd(mp)
+			if fout, ferr := fcmd.CombinedOutput(); ferr != nil {
+				return fmt.Errorf("umount: %v: %s | force: %v: %s", err, out, ferr, fout)
+			}
 		}
-	}
 	fuse.RemoveIfEmpty(mp)
 	logger.Printf("unmounted %s", host)
 	return nil
 }
 
+// fuseInstallPaths are the filesystem locations that indicate a FUSE
+// implementation is installed. FUSE-T is the primary; macFUSE is a fallback.
+var fuseInstallPaths = []string{
+	"/Library/Filesystems/fuse-t.fs",
+	"/Library/Filesystems/macfuse.fs",
+}
+
+// missingPrereqs checks for sshfs in PATH and a FUSE filesystem installation.
+// It returns a list of user-facing messages describing what is missing; an
+// empty list means all prerequisites are satisfied.
+func missingPrereqs() []string {
+	var missing []string
+	if _, err := exec.LookPath("sshfs"); err != nil {
+		missing = append(missing, "SSHFS is required but not found. Install it:\n    brew install sshfs")
+	}
+	if !fuseInstalled() {
+		missing = append(missing, "FUSE-T is required but not found. Install it:\n    brew install --cask fuse-t")
+	}
+	return missing
+}
+
+func fuseInstalled() bool {
+	for _, p := range fuseInstallPaths {
+		if _, err := os.Stat(p); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// detectControlPathDir reads the user's ~/.ssh/config and looks for a
+// ControlPath directive. If found, it extracts the directory portion (the
+// value with any trailing % token and last path component stripped). If not
+// found or on error, it returns "".
+func detectControlPathDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	configPath := filepath.Join(home, ".ssh", "config")
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		keyword, rest := splitKeyword(line)
+		if strings.ToLower(keyword) != "controlpath" {
+			continue
+		}
+		val := strings.TrimSpace(rest)
+		if val == "" || val == "none" {
+			continue
+		}
+		// If the value contains a % token (e.g. %C), the directory is the
+		// path before it: /Users/jesse/.ssh/s/%C → /Users/jesse/.ssh/s.
+		// Otherwise the value is a literal socket path; take its parent dir.
+		if idx := strings.IndexByte(val, '%'); idx >= 0 {
+			val = strings.TrimRight(val[:idx], "/")
+		} else {
+			val = filepath.Dir(val)
+		}
+		if val == "" || val == "." {
+			return ""
+		}
+		return val
+	}
+	return ""
+}
+
+// splitKeyword returns the first whitespace-delimited keyword and the rest.
+func splitKeyword(line string) (keyword, rest string) {
+	i := strings.IndexAny(line, " \t")
+	if i < 0 {
+		return line, ""
+	}
+	return line[:i], strings.TrimSpace(line[i+1:])
+}
+
 func cmdInstall(stdout, stderr io.Writer) int {
 	logger := openLog()
+	// Prerequisite check: sshfs and a FUSE implementation must be installed
+	// before we can set up mounts.
+	if missing := missingPrereqs(); len(missing) > 0 {
+		for _, m := range missing {
+			fmt.Fprintln(stderr, m)
+		}
+		return 1
+	}
 	// Resolve binary path: prefer the current executable so the installed job
 	// runs the same binary the user invoked.
 	binPath, err := os.Executable()
@@ -252,10 +344,16 @@ func cmdInstall(stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "asshfs: cannot resolve own executable: %v\n", err)
 		return 1
 	}
-	socketDir, err := paths.SocketDir()
-	if err != nil {
-		fmt.Fprintf(stderr, "asshfs: %v\n", err)
-		return 1
+	// Detect the ControlPath directory from the user's ssh config; fall back to
+	// the default ~/.ssh/cm. WatchPaths must point at the directory holding the
+	// control sockets so launchd fires reconcile when sockets appear/change.
+	socketDir := detectControlPathDir()
+	if socketDir == "" {
+		socketDir, err = paths.SocketDir()
+		if err != nil {
+			fmt.Fprintf(stderr, "asshfs: %v\n", err)
+			return 1
+		}
 	}
 	if err := os.MkdirAll(socketDir, 0o700); err != nil {
 		fmt.Fprintf(stderr, "asshfs: mkdir %s: %v\n", socketDir, err)
@@ -321,11 +419,11 @@ func cmdUninstall(stdout, stderr io.Writer) int {
 			continue
 		}
 		mp := filepath.Join(mountRoot, e.Name())
-		if isMountPoint(mp) {
-			if err := fuse.LazyUnmountCmd(mp).Run(); err != nil {
-				logger.Printf("uninstall: unmount %s: %v", mp, err)
+			if isMountPoint(mp) {
+				if err := fuse.ForceUnmountCmd(mp).Run(); err != nil {
+					logger.Printf("uninstall: unmount %s: %v", mp, err)
+				}
 			}
-		}
 		fuse.RemoveIfEmpty(mp)
 	}
 	logger.Println("uninstalled")
@@ -344,7 +442,7 @@ func cmdList(stdout, stderr io.Writer) int {
 		return 0
 	}
 	resolved, _ := sshoracle.ResolveAll(hosts)
-	mounted := listMounted(stdout, logger)
+	mounted := listMounted(logger)
 	fmt.Fprintln(stdout, "HOST\tSOCKET\tMOUNTED\tCONTROLPATH")
 	for _, h := range hosts {
 		r, ok := resolved[h]

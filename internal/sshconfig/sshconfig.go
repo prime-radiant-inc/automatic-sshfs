@@ -12,18 +12,27 @@ import (
 
 // Hosts returns the concrete Host aliases declared in the given config file,
 // in declaration order, de-duplicated. Pattern-only Host values (containing
-// any of * ? ! or a leading .) are skipped. Include directives are followed
-// (paths relative to the config file's directory or absolute).
+// any of * ? !) are skipped. Include directives are followed (paths relative
+// to the config file's directory or absolute). Include cycles are detected
+// and skipped to avoid infinite recursion.
 func Hosts(configPath string) ([]string, error) {
 	seen := map[string]bool{}
+	visited := map[string]bool{}
 	var out []string
-	if err := collect(configPath, &out, seen); err != nil {
+	if err := collect(configPath, &out, seen, visited); err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func collect(configPath string, out *[]string, seen map[string]bool) error {
+func collect(configPath string, out *[]string, seen map[string]bool, visited map[string]bool) error {
+	abs, err := filepath.Abs(configPath)
+	if err == nil {
+		if visited[abs] {
+			return nil // already opened; break include cycle
+		}
+		visited[abs] = true
+	}
 	f, err := os.Open(configPath)
 	if err != nil {
 		return fmt.Errorf("sshconfig: open %s: %w", configPath, err)
@@ -61,7 +70,7 @@ func collect(configPath string, out *[]string, seen map[string]bool) error {
 					matches = []string{p} // try as literal
 				}
 				for _, m := range matches {
-					if err := collect(m, out, seen); err != nil {
+					if err := collect(m, out, seen, visited); err != nil {
 						// Missing includes are non-fatal in ssh; skip silently.
 						_ = err
 					}

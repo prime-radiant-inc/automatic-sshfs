@@ -82,6 +82,26 @@ func TestHostsInclude(t *testing.T) {
 	}
 }
 
+func TestHostsIncludeCycle(t *testing.T) {
+	// A config file that includes itself must not cause unbounded recursion.
+	// Hosts should return the hosts declared before the cycle without crashing.
+	dir := t.TempDir()
+	main := filepath.Join(dir, "config")
+	content := "Host web\n    HostName 10.0.0.1\nInclude config\n"
+	if err := os.WriteFile(main, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Hosts(main)
+	if err != nil {
+		t.Fatalf("Hosts returned error on include cycle: %v", err)
+	}
+	// "web" is declared before the self-include; the cycle is skipped.
+	want := []string{"web"}
+	if !equalSlices(got, want) {
+		t.Errorf("Hosts = %v, want %v", got, want)
+	}
+}
+
 func TestHostsMissingFile(t *testing.T) {
 	_, err := Hosts("/nonexistent/path/config")
 	if err == nil {
