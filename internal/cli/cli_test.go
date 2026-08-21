@@ -39,10 +39,14 @@ func TestHelpReturns0(t *testing.T) {
 	}
 }
 
-func TestReconcilePlaceholder(t *testing.T) {
+// Reconcile with an empty/missing ssh config should succeed (no-op) with exit 0,
+// not crash. This is the smoke test for the wiring.
+func TestReconcileNoConfig(t *testing.T) {
+	// Point HOME at a temp dir with no ~/.ssh/config so the reconcile is a no-op.
+	t.Setenv("HOME", t.TempDir())
 	var out, errOut bytes.Buffer
 	code := RunWith([]string{"asshfs", "reconcile"}, &out, &errOut)
-	if code != 1 {
-		t.Errorf("code = %d, want 1 (not yet implemented)", code)
+	if code != 0 {
+		t.Errorf("code = %d, want 0; stderr=%q", code, errOut.String())
 	}
 }
