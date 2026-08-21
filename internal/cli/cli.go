@@ -253,6 +253,34 @@ func cmdUninstall(stdout, stderr io.Writer) int {
 }
 
 func cmdList(stdout, stderr io.Writer) int {
-	fmt.Fprintln(stderr, "list: not yet implemented")
-	return 1
+	logger := openLog()
+	home, _ := os.UserHomeDir()
+	configPath := filepath.Join(home, ".ssh", "config")
+	hosts, err := sshconfig.Hosts(configPath)
+	if err != nil {
+		fmt.Fprintf(stdout, "(no config: %v)\n", err)
+		return 0
+	}
+	resolved, _ := sshoracle.ResolveAll(hosts)
+	mounted := listMounted(stdout, logger)
+	fmt.Fprintln(stdout, "HOST\tSOCKET\tMOUNTED\tCONTROLPATH")
+	for _, h := range hosts {
+		r, ok := resolved[h]
+		if !ok {
+			fmt.Fprintf(stdout, "%s\t?\tno\t?\n", h)
+			continue
+		}
+		socket := "no"
+		if r.ControlPath != "" && r.ControlPath != "none" {
+			if _, err := os.Stat(r.ControlPath); err == nil {
+				socket = "yes"
+			}
+		}
+		m := "no"
+		if mounted[h] {
+			m = "yes"
+		}
+		fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", h, socket, m, r.ControlPath)
+	}
+	return 0
 }

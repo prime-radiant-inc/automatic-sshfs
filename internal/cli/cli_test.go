@@ -50,3 +50,12 @@ func TestReconcileNoConfig(t *testing.T) {
 		t.Errorf("code = %d, want 0; stderr=%q", code, errOut.String())
 	}
 }
+
+func TestListNoConfig(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	var out, errOut bytes.Buffer
+	code := RunWith([]string{"asshfs", "list"}, &out, &errOut)
+	if code != 0 {
+		t.Errorf("code = %d, want 0; stderr=%q", code, errOut.String())
+	}
+}
