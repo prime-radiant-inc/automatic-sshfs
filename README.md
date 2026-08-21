@@ -24,13 +24,18 @@ disappears. No wrapper command to remember — it hooks into OpenSSH's
 
 - **FUSE-T** (userspace FUSE, no kernel extension):
   ```sh
-  brew install --cask fuse-t
+  brew install macos-fuse-t/homebrew-cask/fuse-t
   ```
-- **SSHFS** (the FUSE filesystem that speaks SFTP):
+- **SSHFS** (FUSE-T-compatible build, linked against FUSE-T's libraries):
   ```sh
-  brew install sshfs
+  brew install macos-fuse-t/homebrew-cask/fuse-t-sshfs
   ```
 - **macOS** (uses `launchd`, `umount`, and `syscall.Flock`)
+
+> **Important:** Use the FUSE-T tap (`macos-fuse-t/homebrew-cask`) for both
+> packages. The Homebrew core `sshfs`/`sshfs-mac` formulae are linked against
+> macFUSE, which has a different code-signing Team ID and won't work with
+> FUSE-T.
 
 ## Install
 

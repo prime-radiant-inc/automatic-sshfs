@@ -246,8 +246,10 @@ func doUnmount(host string, logger *log.Logger) error {
 }
 
 // fuseInstallPaths are the filesystem locations that indicate a FUSE
-// implementation is installed. FUSE-T is the primary; macFUSE is a fallback.
+// implementation is installed. FUSE-T installs as a framework (not a .fs);
+// macFUSE uses the traditional /Library/Filesystems path.
 var fuseInstallPaths = []string{
+	"/Library/Frameworks/fuse_t.framework",
 	"/Library/Filesystems/fuse-t.fs",
 	"/Library/Filesystems/macfuse.fs",
 }
@@ -258,10 +260,10 @@ var fuseInstallPaths = []string{
 func missingPrereqs() []string {
 	var missing []string
 	if _, err := exec.LookPath("sshfs"); err != nil {
-		missing = append(missing, "SSHFS is required but not found. Install it:\n    brew install sshfs")
+		missing = append(missing, "SSHFS is required but not found. Install it:\n    brew install macos-fuse-t/homebrew-cask/fuse-t-sshfs")
 	}
 	if !fuseInstalled() {
-		missing = append(missing, "FUSE-T is required but not found. Install it:\n    brew install --cask fuse-t")
+		missing = append(missing, "FUSE-T is required but not found. Install it:\n    brew install macos-fuse-t/homebrew-cask/fuse-t")
 	}
 	return missing
 }
