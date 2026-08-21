@@ -233,13 +233,13 @@ func doUnmount(host string, logger *log.Logger) error {
 		return err
 	}
 	cmd := fuse.UnmountCmd(mp)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			// Busy? Try force unmount.
-			fcmd := fuse.ForceUnmountCmd(mp)
-			if fout, ferr := fcmd.CombinedOutput(); ferr != nil {
-				return fmt.Errorf("umount: %v: %s | force: %v: %s", err, out, ferr, fout)
-			}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		// Busy? Try force unmount.
+		fcmd := fuse.ForceUnmountCmd(mp)
+		if fout, ferr := fcmd.CombinedOutput(); ferr != nil {
+			return fmt.Errorf("umount: %v: %s | force: %v: %s", err, out, ferr, fout)
 		}
+	}
 	fuse.RemoveIfEmpty(mp)
 	logger.Printf("unmounted %s", host)
 	return nil
@@ -301,6 +301,12 @@ func detectControlPathDir() string {
 		val := strings.TrimSpace(rest)
 		if val == "" || val == "none" {
 			continue
+		}
+		// Expand a leading ~ to the home directory.
+		if val == "~" {
+			val = home
+		} else if strings.HasPrefix(val, "~/") {
+			val = filepath.Join(home, val[2:])
 		}
 		// If the value contains a % token (e.g. %C), the directory is the
 		// path before it: /Users/jesse/.ssh/s/%C → /Users/jesse/.ssh/s.
@@ -419,11 +425,11 @@ func cmdUninstall(stdout, stderr io.Writer) int {
 			continue
 		}
 		mp := filepath.Join(mountRoot, e.Name())
-			if isMountPoint(mp) {
-				if err := fuse.ForceUnmountCmd(mp).Run(); err != nil {
-					logger.Printf("uninstall: unmount %s: %v", mp, err)
-				}
+		if isMountPoint(mp) {
+			if err := fuse.ForceUnmountCmd(mp).Run(); err != nil {
+				logger.Printf("uninstall: unmount %s: %v", mp, err)
 			}
+		}
 		fuse.RemoveIfEmpty(mp)
 	}
 	logger.Println("uninstalled")

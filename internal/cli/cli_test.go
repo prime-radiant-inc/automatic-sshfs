@@ -142,6 +142,21 @@ func TestInstallDetectsControlPathFallback(t *testing.T) {
 	}
 }
 
+func TestInstallDetectsControlPathTilde(t *testing.T) {
+	// ControlPath with ~/ should expand to the home directory.
+	home := t.TempDir()
+	sshDir := filepath.Join(home, ".ssh")
+	os.MkdirAll(sshDir, 0o700)
+	configContent := "Host *\n    ControlPath ~/.ssh/cm/%C\n"
+	os.WriteFile(filepath.Join(sshDir, "config"), []byte(configContent), 0o600)
+	t.Setenv("HOME", home)
+	got := detectControlPathDir()
+	want := filepath.Join(home, ".ssh", "cm")
+	if got != want {
+		t.Errorf("detectControlPathDir = %q, want %q (tilde not expanded)", got, want)
+	}
+}
+
 func TestUninstallSmoke(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	var out, errOut bytes.Buffer
