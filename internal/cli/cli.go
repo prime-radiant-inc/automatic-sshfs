@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"github.com/jesse/automatic-sshfs/internal/fuse"
+	"github.com/jesse/automatic-sshfs/internal/launchd"
 	"github.com/jesse/automatic-sshfs/internal/paths"
 	"github.com/jesse/automatic-sshfs/internal/reconcile"
 	"github.com/jesse/automatic-sshfs/internal/sshconfig"
@@ -243,13 +244,94 @@ func doUnmount(host string, logger *log.Logger) error {
 }
 
 func cmdInstall(stdout, stderr io.Writer) int {
-	fmt.Fprintln(stderr, "install: not yet implemented")
-	return 1
+	logger := openLog()
+	// Resolve binary path: prefer the current executable so the installed job
+	// runs the same binary the user invoked.
+	binPath, err := os.Executable()
+	if err != nil {
+		fmt.Fprintf(stderr, "asshfs: cannot resolve own executable: %v\n", err)
+		return 1
+	}
+	socketDir, err := paths.SocketDir()
+	if err != nil {
+		fmt.Fprintf(stderr, "asshfs: %v\n", err)
+		return 1
+	}
+	if err := os.MkdirAll(socketDir, 0o700); err != nil {
+		fmt.Fprintf(stderr, "asshfs: mkdir %s: %v\n", socketDir, err)
+		return 1
+	}
+	mountRoot, err := paths.MountRoot()
+	if err != nil {
+		fmt.Fprintf(stderr, "asshfs: %v\n", err)
+		return 1
+	}
+	if err := os.MkdirAll(mountRoot, 0o755); err != nil {
+		fmt.Fprintf(stderr, "asshfs: mkdir %s: %v\n", mountRoot, err)
+		return 1
+	}
+	plistPath, err := paths.PlistPath()
+	if err != nil {
+		fmt.Fprintf(stderr, "asshfs: %v\n", err)
+		return 1
+	}
+	if err := os.MkdirAll(filepath.Dir(plistPath), 0o755); err != nil {
+		fmt.Fprintf(stderr, "asshfs: %v\n", err)
+		return 1
+	}
+	xml := launchd.Plist(socketDir, binPath)
+	if err := os.WriteFile(plistPath, []byte(xml), 0o644); err != nil {
+		fmt.Fprintf(stderr, "asshfs: write plist: %v\n", err)
+		return 1
+	}
+	if err := launchd.Load(plistPath); err != nil {
+		fmt.Fprintf(stderr, "asshfs: load: %v\n", err)
+		return 1
+	}
+	logger.Println("installed")
+	fmt.Fprintln(stdout, "Installed asshfs launchd agent.")
+	fmt.Fprintln(stdout, "Add the following to ~/.ssh/config (asshfs will not edit it for you):")
+	fmt.Fprintln(stdout, "")
+	fmt.Fprintln(stdout, "    Host *")
+	fmt.Fprintln(stdout, "        ControlMaster auto")
+	fmt.Fprintln(stdout, "        ControlPath "+socketDir+"/%C")
+	fmt.Fprintln(stdout, "        ControlPersist 30s")
+	fmt.Fprintln(stdout, "")
+	fmt.Fprintln(stdout, "Then ssh to any configured host to mount its filesystem at ~/sshfs/<host>/.")
+	return 0
 }
 
 func cmdUninstall(stdout, stderr io.Writer) int {
-	fmt.Fprintln(stderr, "uninstall: not yet implemented")
-	return 1
+	logger := openLog()
+	plistPath, err := paths.PlistPath()
+	if err != nil {
+		fmt.Fprintf(stderr, "asshfs: %v\n", err)
+		return 1
+	}
+	if err := launchd.Unload(plistPath); err != nil {
+		fmt.Fprintf(stderr, "asshfs: unload: %v\n", err)
+		// continue to clean up anyway
+	}
+	_ = os.Remove(plistPath)
+	// Unmount everything currently mounted under ~/sshfs/.
+	mountRoot, _ := paths.MountRoot()
+	entries, _ := os.ReadDir(mountRoot)
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		mp := filepath.Join(mountRoot, e.Name())
+		if isMountPoint(mp) {
+			if err := fuse.LazyUnmountCmd(mp).Run(); err != nil {
+				logger.Printf("uninstall: unmount %s: %v", mp, err)
+			}
+		}
+		fuse.RemoveIfEmpty(mp)
+	}
+	logger.Println("uninstalled")
+	fmt.Fprintln(stdout, "Uninstalled asshfs launchd agent and unmounted all mounts.")
+	fmt.Fprintln(stdout, "Remove the ControlMaster/ControlPath/ControlPersist lines from ~/.ssh/config if you wish.")
+	return 0
 }
 
 func cmdList(stdout, stderr io.Writer) int {
