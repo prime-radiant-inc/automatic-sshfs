@@ -44,17 +44,17 @@ go install github.com/jesse/automatic-sshfs/cmd/asshfs@latest
 asshfs install
 ```
 
-The `install` command will print the SSH config block to add. It looks like
-this:
+The `install` command automatically:
+1. Checks that FUSE-T and sshfs are installed (prints install commands if missing)
+2. Creates the socket directory (`~/.ssh/cm/` or your existing ControlPath dir)
+3. Creates the mount root (`~/sshfs/`)
+4. Writes a managed SSH config snippet to `~/.ssh/asshfs.conf` with the
+   `ControlMaster`/`ControlPath`/`ControlPersist` directives
+5. Adds `Include asshfs.conf` to your `~/.ssh/config` (no manual editing needed)
+6. Installs and loads a `launchd` agent that watches the socket directory
 
-```
-Host *
-    ControlMaster auto
-    ControlPath ~/.ssh/cm/%C
-    ControlPersist 30s
-```
-
-Add it to `~/.ssh/config`. `asshfs` will never edit your SSH config for you.
+No manual config file editing required. `asshfs` manages its own snippet file
+and cleans it up on uninstall.
 
 ## Usage
 
@@ -117,6 +117,6 @@ asshfs uninstall
 ```
 
 This unloads the `launchd` agent, removes the plist, unmounts all
-`asshfs`-managed mounts, and removes empty mount directories. Remove the
-`ControlMaster`/`ControlPath`/`ControlPersist` lines from `~/.ssh/config`
-manually if you no longer want connection multiplexing.
+`asshfs`-managed mounts, removes the `~/.ssh/asshfs.conf` snippet, and
+removes the `Include` directive from `~/.ssh/config`. Your own SSH config
+entries are untouched.
