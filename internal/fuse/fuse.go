@@ -29,10 +29,14 @@ func MountCmd(a MountArgs) *exec.Cmd {
 		target = fmt.Sprintf("%s@%s:/", a.User, a.HostName)
 	}
 	// Options order is stable for testability.
+	// Note: we do NOT pass -o reconnect. With sshfs 2.9 + FUSE-T, reconnect
+	// causes a busy-spin in fuse_chan_recv on long-lived mounts when the
+	// underlying connection has intermittent issues, eating 100% CPU.
+	// Instead, if the connection drops, the mount fails and reconcile
+	// remounts on the next socket event.
 	opts := []string{
 		"-o", "ControlPath=" + a.ControlPath,
 		"-o", "ControlMaster=no",
-		"-o", "reconnect",
 		"-o", "port=" + a.Port,
 	}
 	args := append([]string{target, a.MountPoint}, opts...)
