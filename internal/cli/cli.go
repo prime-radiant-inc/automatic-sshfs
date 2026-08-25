@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -94,15 +95,23 @@ func cmdReconcile(stdout, stderr io.Writer) int {
 	defer release()
 
 	// 1. Enumerate hosts from config.
-	hosts, err := sshconfig.Hosts(configPath)
+	configHosts, err := sshconfig.Hosts(configPath)
 	if err != nil {
 		// Missing config is not fatal: nothing to reconcile.
 		logger.Printf("sshconfig: %v", err)
 		// Fall through — we can still check known_hosts.
 	}
 
+	// Build a set of config-only hosts for canonical preference.
+	configHostSet := map[string]bool{}
+	for _, h := range configHosts {
+		configHostSet[h] = true
+	}
+
 	// Also add hosts from known_hosts (hosts the user has connected to
 	// before but may not have explicit Host entries for).
+	var hosts []string
+	hosts = append(hosts, configHosts...)
 	knownHostsPath := filepath.Join(home, ".ssh", "known_hosts")
 	if kh, err := sshconfig.KnownHosts(knownHostsPath); err == nil {
 		for _, h := range kh {
@@ -125,20 +134,47 @@ func cmdReconcile(stdout, stderr io.Writer) int {
 	for h, e := range errs {
 		logger.Printf("resolve %s: %v", h, e)
 	}
-	desired := make(map[string]bool)
+
+	// 3. Group hosts by control path. Multiple hostnames can resolve to the
+	// same control socket (e.g. "paradise-park" and "jesse-paradise-park").
+	// Pick one canonical host per socket to mount; the rest get symlinks.
+	socketToHosts := map[string][]string{} // controlpath -> list of hosts
 	for h, r := range resolved {
 		if r.ControlPath == "" || r.ControlPath == "none" {
 			continue
 		}
 		if _, statErr := os.Stat(r.ControlPath); statErr == nil {
-			desired[h] = true
+			socketToHosts[r.ControlPath] = append(socketToHosts[r.ControlPath], h)
 		}
 	}
 
-	// 3. List actual mounts: directories under ~/sshfs/ that are mount points.
+	// For each socket group, pick canonical (prefer config hosts, then
+	// alphabetical) deterministically.
+	desired := make(map[string]bool)
+	symlinkMap := map[string]string{} // alias -> canonical
+	for _, groupHosts := range socketToHosts {
+		// Sort for deterministic selection.
+		sort.Strings(groupHosts)
+		// Prefer a host that's in the ssh config (not just known_hosts).
+		canonical := groupHosts[0] // default: first alphabetical
+		for _, h := range groupHosts {
+			if configHostSet[h] {
+				canonical = h
+				break
+			}
+		}
+		desired[canonical] = true
+		for _, h := range groupHosts {
+			if h != canonical {
+				symlinkMap[h] = canonical
+			}
+		}
+	}
+
+	// 4. List actual mounts: directories under ~/sshfs/ that are mount points.
 	actual := listMounted(logger)
 
-	// 4. Diff and execute.
+	// 5. Diff and execute.
 	plan := reconcile.Diff(desired, actual)
 	for _, h := range plan.Mounts {
 		if err := doMount(h, resolved[h], logger); err != nil {
@@ -148,6 +184,57 @@ func cmdReconcile(stdout, stderr io.Writer) int {
 	for _, h := range plan.Unmounts {
 		if err := doUnmount(h, logger); err != nil {
 			logger.Printf("unmount %s: %v", h, err)
+		}
+	}
+
+	// 6. Create symlinks for aliases that share a socket with a canonical host.
+	for alias, canonical := range symlinkMap {
+		aliasPath, err := paths.MountPoint(alias)
+		if err != nil {
+			continue
+		}
+		canonicalPath, err := paths.MountPoint(canonical)
+		if err != nil {
+			continue
+		}
+		// Only create symlink if the canonical mount exists and the alias
+		// isn't already a symlink or mount point.
+		if !isMountPoint(canonicalPath) {
+			continue
+		}
+		if fi, err := os.Lstat(aliasPath); err == nil {
+			// Already exists — check if it's the right symlink.
+			if fi.Mode()&os.ModeSymlink != 0 {
+				if target, err := os.Readlink(aliasPath); err == nil && target == canonicalPath {
+					continue // already correct
+				}
+			}
+			// It's a real dir or mount — skip, don't touch it.
+			continue
+		}
+		if err := os.Symlink(canonicalPath, aliasPath); err != nil {
+			logger.Printf("symlink %s -> %s: %v", alias, canonical, err)
+		} else {
+			logger.Printf("symlinked %s -> %s", alias, canonical)
+		}
+	}
+
+	// 7. Clean up symlinks whose canonical mount is gone or that are no
+	// longer in the symlink map (host socket disappeared).
+	root, _ := paths.MountRoot()
+	entries, _ := os.ReadDir(root)
+	for _, e := range entries {
+		mp := filepath.Join(root, e.Name())
+		if fi, err := os.Lstat(mp); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+			target, err := os.Readlink(mp)
+			if err != nil {
+				continue
+			}
+			// Only remove if the target mount is gone.
+			if !isMountPoint(target) {
+				os.Remove(mp)
+				logger.Printf("removed stale symlink %s -> %s", e.Name(), target)
+			}
 		}
 	}
 	return 0
