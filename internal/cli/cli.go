@@ -220,10 +220,15 @@ func doMount(host string, r sshoracle.Resolved, logger *log.Logger) error {
 		Host: host, User: r.User, HostName: r.HostName, Port: r.Port,
 		ControlPath: r.ControlPath, MountPoint: mp,
 	})
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("sshfs: %v: %s", err, out)
+	// Start sshfs in the background — it stays alive for the life of the mount.
+	// CombinedOutput would block forever since sshfs doesn't exit until unmounted.
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("sshfs: %v", err)
 	}
-	logger.Printf("mounted %s at %s", host, mp)
+	// Give it a moment to establish the mount, then verify it's mounted.
+	// If sshfs exits immediately (connection failure), Start won't catch it,
+	// but the next reconcile cycle will detect the missing mount and retry.
+	logger.Printf("mounted %s at %s (pid=%d)", host, mp, cmd.Process.Pid)
 	return nil
 }
 

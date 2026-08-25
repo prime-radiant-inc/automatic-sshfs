@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
 )
 
 // MountArgs describes a mount operation.
@@ -40,7 +41,18 @@ func MountCmd(a MountArgs) *exec.Cmd {
 		"-o", "port=" + a.Port,
 	}
 	args := append([]string{target, a.MountPoint}, opts...)
-	return exec.Command("sshfs", args...)
+	// Resolve sshfs to an absolute path so it works even when PATH is
+	// limited (e.g. launchd-spawned reconcile only has /usr/bin:/bin).
+	bin := "sshfs"
+	if p, err := exec.LookPath("sshfs"); err == nil {
+		bin = p
+	}
+	cmd := exec.Command(bin, args...)
+	// Detach sshfs into its own session so it survives when the reconcile
+	// process exits. Without this, launchd may kill child processes when
+	// the parent (reconcile) terminates.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	return cmd
 }
 
 // UnmountCmd returns the standard umount for a mount point.

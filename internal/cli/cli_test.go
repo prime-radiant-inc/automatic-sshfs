@@ -126,10 +126,11 @@ func TestInstallDetectsControlPath(t *testing.T) {
 		t.Errorf("detectControlPathDir = %q, want %q", got, customDir)
 	}
 
-	// The plist's WatchPaths should reference the detected directory.
+	// The plist should be well-formed (no longer contains WatchPaths, but
+	// the ControlPath dir is still used by install to create the socket dir).
 	plist := launchd.Plist(got, "/usr/local/bin/asshfs")
-	if !strings.Contains(plist, customDir) {
-		t.Errorf("plist does not contain custom ControlPath dir %q:\n%s", customDir, plist)
+	if !strings.Contains(plist, "StartInterval") {
+		t.Errorf("plist does not contain StartInterval:\n%s", plist)
 	}
 }
 

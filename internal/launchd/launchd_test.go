@@ -14,11 +14,8 @@ func TestPlistContainsRequiredKeys(t *testing.T) {
 	if !strings.Contains(got, "io.asshfs.reconcile") {
 		t.Error("missing label value")
 	}
-	if !strings.Contains(got, "<key>WatchPaths</key>") {
-		t.Error("missing WatchPaths")
-	}
-	if !strings.Contains(got, "/Users/jesse/.ssh/cm") {
-		t.Error("missing socket dir")
+	if !strings.Contains(got, "<key>StartInterval</key>") {
+		t.Error("missing StartInterval")
 	}
 	if !strings.Contains(got, "<key>ProgramArguments</key>") {
 		t.Error("missing ProgramArguments")
@@ -31,6 +28,16 @@ func TestPlistContainsRequiredKeys(t *testing.T) {
 	}
 	if !strings.Contains(got, "<key>RunAtLoad</key>") {
 		t.Error("missing RunAtLoad")
+	}
+	if !strings.Contains(got, "<key>EnvironmentVariables</key>") {
+		t.Error("missing EnvironmentVariables")
+	}
+	if !strings.Contains(got, "/usr/local/bin:/opt/homebrew/bin") {
+		t.Error("missing PATH with homebrew dirs")
+	}
+	// Should NOT contain WatchPaths — we use StartInterval instead.
+	if strings.Contains(got, "WatchPaths") {
+		t.Error("should not contain WatchPaths (replaced by StartInterval)")
 	}
 }
 
