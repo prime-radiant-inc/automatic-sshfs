@@ -103,3 +103,52 @@ func isPattern(name string) bool {
 	}
 	return false
 }
+
+// KnownHosts returns hostnames from ~/.ssh/known_hosts. These are hosts the
+// user has connected to before, even if they have no explicit Host entry in
+// ~/.ssh/config. Each line of known_hosts is "hostname key-type key-data" or
+// "hostname:port key-type key-data". Multiple hostnames can be
+// comma-separated. Hashed entries (|1|...) are skipped since they can't be
+// reversed.
+func KnownHosts(knownHostsPath string) ([]string, error) {
+	f, err := os.Open(knownHostsPath)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	seen := map[string]bool{}
+	var out []string
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		// Skip hashed entries: |1|hash|hash
+		if strings.HasPrefix(line, "|1|") {
+			continue
+		}
+		// First field is the hostname(s), comma-separated.
+		// Can also be hostname:port.
+		parts := strings.Fields(line)
+		if len(parts) < 2 {
+			continue
+		}
+		for _, host := range strings.Split(parts[0], ",") {
+			host = strings.TrimSpace(host)
+			// Strip :port suffix if present (e.g. github.com:22)
+			if idx := strings.LastIndex(host, ":"); idx > 0 && !strings.Contains(host[idx+1:], ":") {
+				host = host[:idx]
+			}
+			if host == "" || isPattern(host) {
+				continue
+			}
+			if !seen[host] {
+				seen[host] = true
+				out = append(out, host)
+			}
+		}
+	}
+	return out, sc.Err()
+}

@@ -98,7 +98,26 @@ func cmdReconcile(stdout, stderr io.Writer) int {
 	if err != nil {
 		// Missing config is not fatal: nothing to reconcile.
 		logger.Printf("sshconfig: %v", err)
-		return 0
+		// Fall through — we can still check known_hosts.
+	}
+
+	// Also add hosts from known_hosts (hosts the user has connected to
+	// before but may not have explicit Host entries for).
+	knownHostsPath := filepath.Join(home, ".ssh", "known_hosts")
+	if kh, err := sshconfig.KnownHosts(knownHostsPath); err == nil {
+		for _, h := range kh {
+			// De-duplicate against config hosts.
+			found := false
+			for _, existing := range hosts {
+				if existing == h {
+					found = true
+					break
+				}
+			}
+			if !found {
+				hosts = append(hosts, h)
+			}
+		}
 	}
 
 	// 2. Resolve each host's control path via ssh -G, check socket existence.
@@ -557,7 +576,27 @@ func cmdList(stdout, stderr io.Writer) int {
 	configPath := filepath.Join(home, ".ssh", "config")
 	hosts, err := sshconfig.Hosts(configPath)
 	if err != nil {
-		fmt.Fprintf(stdout, "(no config: %v)\n", err)
+		// Missing config is non-fatal; continue with empty list.
+		hosts = nil
+	}
+	// Also add hosts from known_hosts.
+	knownHostsPath := filepath.Join(home, ".ssh", "known_hosts")
+	if kh, err := sshconfig.KnownHosts(knownHostsPath); err == nil {
+		for _, h := range kh {
+			found := false
+			for _, existing := range hosts {
+				if existing == h {
+					found = true
+					break
+				}
+			}
+			if !found {
+				hosts = append(hosts, h)
+			}
+		}
+	}
+	if len(hosts) == 0 {
+		fmt.Fprintln(stdout, "(no hosts found)")
 		return 0
 	}
 	resolved, _ := sshoracle.ResolveAll(hosts)
