@@ -14,8 +14,15 @@ func TestPlistContainsRequiredKeys(t *testing.T) {
 	if !strings.Contains(got, "io.asshfs.reconcile") {
 		t.Error("missing label value")
 	}
-	if !strings.Contains(got, "<key>StartInterval</key>") {
-		t.Error("missing StartInterval")
+	if !strings.Contains(got, "<key>KeepAlive</key>") {
+		t.Error("missing KeepAlive")
+	}
+	// Should NOT contain WatchPaths or StartInterval — we use KeepAlive + watch daemon.
+	if strings.Contains(got, "WatchPaths") {
+		t.Error("should not contain WatchPaths")
+	}
+	if strings.Contains(got, "StartInterval") {
+		t.Error("should not contain StartInterval")
 	}
 	if !strings.Contains(got, "<key>ProgramArguments</key>") {
 		t.Error("missing ProgramArguments")

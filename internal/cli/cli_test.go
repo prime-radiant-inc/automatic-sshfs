@@ -129,8 +129,8 @@ func TestInstallDetectsControlPath(t *testing.T) {
 	// The plist should be well-formed (no longer contains WatchPaths, but
 	// the ControlPath dir is still used by install to create the socket dir).
 	plist := launchd.Plist(got, "/usr/local/bin/asshfs")
-	if !strings.Contains(plist, "StartInterval") {
-		t.Errorf("plist does not contain StartInterval:\n%s", plist)
+	if !strings.Contains(plist, "KeepAlive") {
+		t.Errorf("plist does not contain KeepAlive:\n%s", plist)
 	}
 }
 

@@ -10,11 +10,9 @@ import (
 const label = "io.asshfs.reconcile"
 
 // Plist returns the launchd agent plist XML for a job that runs
-// `binPath reconcile` every 15 seconds, and once at load.
-// We use StartInterval instead of WatchPaths because launchd WatchPaths
-// does not reliably fire on Unix socket file creation/removal — it only
-// fires on regular file vnode changes. A 15-second poll is cheap (reconcile
-// is idempotent and fast) and reliably catches new/closed SSH sessions.
+// `binPath watch` as a long-running daemon. The watch command stays alive
+// and polls every 15 seconds, which is more reliable than launchd's
+// StartInterval (which doesn't fire for short-lived processes).
 func Plist(socketDir, binPath string) string {
 	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -25,10 +23,10 @@ func Plist(socketDir, binPath string) string {
     <key>ProgramArguments</key>
     <array>
         <string>%s</string>
-        <string>reconcile</string>
+        <string>watch</string>
     </array>
-    <key>StartInterval</key>
-    <integer>15</integer>
+    <key>KeepAlive</key>
+    <true/>
     <key>RunAtLoad</key>
     <true/>
     <key>EnvironmentVariables</key>

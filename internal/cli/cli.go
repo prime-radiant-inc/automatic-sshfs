@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/jesse/automatic-sshfs/internal/fuse"
 	"github.com/jesse/automatic-sshfs/internal/launchd"
@@ -35,6 +36,8 @@ func RunWith(args []string, stdout, stderr io.Writer) int {
 	switch args[1] {
 	case "reconcile":
 		return cmdReconcile(stdout, stderr)
+	case "watch":
+		return cmdWatch(stdout, stderr)
 	case "install":
 		return cmdInstall(stdout, stderr)
 	case "uninstall":
@@ -52,7 +55,7 @@ func RunWith(args []string, stdout, stderr io.Writer) int {
 }
 
 func usage(w io.Writer) {
-	fmt.Fprintln(w, "usage: asshfs <reconcile|install|uninstall|list>")
+	fmt.Fprintln(w, "usage: asshfs <reconcile|watch|install|uninstall|list>")
 }
 
 // openLog opens the asshfs log file (~/Library/Logs/asshfs.log) for appending,
@@ -127,6 +130,25 @@ func cmdReconcile(stdout, stderr io.Writer) int {
 		if err := doUnmount(h, logger); err != nil {
 			logger.Printf("unmount %s: %v", h, err)
 		}
+	}
+	return 0
+}
+
+// cmdWatch runs reconcile in a loop every 15 seconds. This is the mode
+// launchd uses — KeepAlive keeps the process alive, and the internal
+// loop handles polling. This is more reliable than launchd's StartInterval
+// which has quirks with short-lived processes.
+func cmdWatch(stdout, stderr io.Writer) int {
+	logger := openLog()
+	logger.Println("watch: starting 15s poll loop")
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+
+	// Run once immediately.
+	cmdReconcile(stdout, stderr)
+
+	for range ticker.C {
+		cmdReconcile(stdout, stderr)
 	}
 	return 0
 }
